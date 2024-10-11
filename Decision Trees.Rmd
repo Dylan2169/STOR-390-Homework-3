@@ -1,0 +1,300 @@
+---
+title: "Decision Trees"
+author: "Andy Ackerman"
+date: "11/8/2023"
+output: html_document
+---
+
+## Decision Trees
+ 
+A decision tree, on the other hand, is a type of supervised machine learning method that is applicable for both regression and classification.  In the context of categorical response variables, we have classification based decision trees.  
+
+In a decision tree we begin first with the root node comprised of the entire sample.  This is then divided into homogeneous sets based on some decision rule.  These homogeneous sets can be further subdivided or terminate in what is known as a terminal node or leaf.  Once all nodes reach a terminus, the classification is complete and the resulting classes are governed by the terminal nodes.  
+
+![](/Users/andyackerman/Documents/classes taught/stor 320/Lectures/Modelling 5/tree.png){ width=60% }
+
+As we discussed in the chalk-board lecture, the all important question then becomes, "How to split the decision nodes?".  There are three accepted practices for answering this question -- the classification error rate, Gini Index, and Cross-Entropy.  The latter two metrics quantify the extent to which a region is "pure".  That is, how much of the training data in a particular region belongs to a single class.  A large proportion of the training data being from a single class is a good measure of homogeneity and subsequently a small (better) Gini index.  By contrast the classification error rate indicates the fraction of training observations in a particular region that don't belong to the most widely occurring class.  Each has its particular merits, but generally speaking the Gini Index and entropy are used when *building* a tree and the classification error rate is preferable when *refining* ("pruning") said tree.  
+
+One thing that is implicit in the above discussion is the method by which we predict on the testing data set.  Simply put, we predict that each observation belongs to the most commonly occurring class of training observations in the region to which it belongs. 
+
+
+# Car Sales Data 
+
+
+
+We will demonstrate the tree-based approach using the `Carseats` dataset in the `tree` package.  `ISLR` and `rpart` are also requisite libraries.  The aforementioned dataset has 400 observations of 11 variables.  Of particular note is the numeric variable `Sales` which we will convert into a factor and attempt to classify upon.  
+
+```{r}
+library(ISLR)
+library(tree)
+library(rpart)
+
+data(package="ISLR")
+carseats<-Carseats
+names(carseats)
+hist(carseats$Sales)
+
+
+
+
+```
+
+It should be noted that sales is roughly normal with a center somewhere around 8.  As such, for the purposes of this model, we will characterize any sales observation larger than 8 as "high" and conversely anything lower than this threshold and "low".
+
+```{r}
+High = ifelse(carseats$Sales<=8, "Low", "High")
+carseats = data.frame(carseats, High)
+```
+
+It is worth noting that the creation of this binary sales categorical variable does not remove the pre-existing sales variable.  Therefore, when creating our model, we should be sure to correctly specify the correct response and explanatory variables. A second word of warning is to note that `High` as it is currently created is a character rather than factor.  For `rpart` this is not problematic.  However, there are other tree-building commands you may find in the literature, such as `tree()` where this will be intractable.  Instead, `tree` will insist upon a factor by creating NA's from the characters.  
+
+
+More to the point at hand, we call the `rpart` command and specify `method = class`.  The tells `rpart` that not only is it building a tree, but it is a classification tree.  Moreover, the default splitting method for classification will be the Gini Index which is perfectly acceptable, as we are in the model building stage.  
+
+```{r}
+library(rpart.plot)
+
+car.tree <- rpart(High ~. -Sales, data = carseats, method = "class")
+par(xpd = NA) # otherwise on some devices the text is clipped
+
+plot(car.tree)
+text(car.tree, pretty = 0)
+
+rpart.plot(car.tree)
+
+```
+
+
+Visualizing the tree allows us to not only see where particular nodes are being split but how.  To interpret this, we could go down one branch of the tree to a terminal node and ascertain that groupings classification relative to price.  That is, if the ShelveLoc was medium or worse, Price Variable was less than 92.5 and the Income variable was greater than 57, the resulting sale was deemed High.  Similarly, if the ShelveLoc was Good and the price was greater than 142.5, the sale was deemed low.  The graphic is admittedly cluttered (and grows ever more cluttered the more nodes we have), but it does serve to illustrate the decision-making regime.  
+
+Let's try partitioning the data into a training and testing set so that we can make classifications on new data.  We will also use this partition to cross validate the tuning parameters for pruning.   
+ 
+
+
+```{r}
+
+library(tree)
+Highfac<-as.factor(High)
+carseats<-data.frame(carseats, Highfac)
+carseats<-carseats[,-12]
+str(carseats)
+
+set.seed(101)
+train=sample(1:nrow(carseats), 320)
+
+
+```
+
+Above we have created a nice 80-20 split and ensured that our factored variables are recognized as such by R.  Now we will use the `tree` command rather than the `rpart` command, as this is more conformable to prediction and cross-validation commands.  
+
+```{r}
+
+tree.carseats = tree(Highfac~.-Sales, carseats, subset=train)
+plot(tree.carseats)
+text(tree.carseats, pretty=0)
+
+tree.pred = predict(tree.carseats, carseats[-train,], type="class")
+with(carseats[-train,], table(tree.pred, Highfac))
+(19+42)/80
+
+```
+
+We can see that the full (bushy) tree has a classification error rate of abut 24%.  Let's try to prune this to aid in interpretability and prevent overfitting.  Ideally, this will not significantly hamper classification.  Recall that when we are initially building our tree we usually use the Gini index or cross-entropy as our decision criterion for splits.  Now that we are cross validating for pruning, we turn to the misclassification rate. Lastly, note that the plot command will require information stored within the `cv.tree` command.  This includes size and deviance but not misclassification rate.  Despite its name, deviance in the `cv.tree` function really corresponds to the number of cross-validation errors, so it should have a monotonic relationship with misclassification ^[That is to say, as the number of misclassifications (dev) increase so too will you misclassification error rate.  Therefore we can think of deviance as a nice proxy for misclassification error rate.  Do not confuse the above statement to say that deviance will have a monotonic relationship with the complexity (size) of the model.  We can see from the plot, this is not genereally true. ] error rate ^[Note that in specifying the misclassification error rate as the cross validation criteria, you are ensuring you minimize this error for the CV data, not necessarily for the testing data.  A slightly different choice of size may minimize the testing misclassification.  Recall though, this is not a deterrent; we want to build our model on different data than what we use to evaluate it so as to ensure we do not overfit the model.]. So make sure to specify deviance as your y-axis, or you will give the mistaken impression of reporting an error rate (potentially) over 100\%.  
+
+
+```{r}
+set.seed(13)
+cv.carseats = cv.tree(tree.carseats, FUN = prune.misclass)
+cv.carseats
+
+plot(cv.carseats$size, cv.carseats$dev, type = "b")
+
+prune.carseats = prune.misclass(tree.carseats, best = 11)
+plot(prune.carseats)
+text(prune.carseats, pretty=0)
+
+tree.pred = predict(prune.carseats, carseats[-train,], type="class")
+with(carseats[-train,], table(tree.pred, Highfac))
+60/80
+
+```
+
+Above we can see there is a *local* cross validation minimum at 10-11 splits.  We will use this as our chosen number of splits.   This pruned model boasts a 75% classification accuracy which is a very modest decrease from the full model.  But we have substantially simplified the tree, improving its interpretability and generalizability. 
+
+
+# Titanic Model 
+
+To provide a second example and also demonstrate the potential pitfalls of under-representative training data, we will turn to the `titanic` data set.  If you have taken 455 with me, we used this data set to examine logistic regression, but now we will see a similar classification task undertaken with decision trees.  
+
+
+```{r}
+
+path <- 'https://raw.githubusercontent.com/guru99-edu/R-Programming/master/titanic_data.csv'
+titanic <-read.csv(path)
+head(titanic)
+
+```
+
+Now we need to do some cleaning.  First, this dataset is currently storing missing values as `?` characters, which R will not recognize as missing.  Therefore, if we are to replace missing values, we need to convert these to `NA`.  
+
+```{r}
+library(dplyr)
+
+#replace ? with NA
+replace_question_mark <- function(x) {
+  if (is.character(x)) {
+    x <- na_if(x, "?")
+  }
+  return(x)
+}
+
+titanic <- titanic %>%
+  mutate_all(replace_question_mark)
+
+
+```
+
+Now, I will randomly shuffle our observations.  This is quite important, becuase as it currently stands the data is ordered by class of ticket.  Therefore, if we simply took the first 75\% of the data, we would likely be training on almost entirely first and second class fares while reserving nothing but third class fares for testing.  
+
+```{r}
+
+set.seed(678)
+shuffle_index <- sample(1:nrow(titanic))
+head(shuffle_index)
+titanic <- titanic[shuffle_index, ]
+head(titanic)
+
+```
+
+Now, let's remove some unnecessary predictors and ensure our factorized variables are again read in as such.  I will use `dplyr` and the piping function to expidite this process.  Finally, realize that oddly enough, `age` and `fare` are numeric variables that are originally stored as characters in this dataset.  If you do not do something to account for this, your splits will be incorrect.  So let's coerce these variables to numeric quantities.  
+
+```{r}
+
+library(dplyr)
+# Drop variables
+clean_titanic <- titanic %>%
+select(-c(home.dest, cabin, name, x, ticket)) %>% 
+#Convert to factor level
+	mutate(pclass = factor(pclass, levels = c(1, 2, 3), labels = c('Upper', 'Middle', 'Lower')),
+	survived = factor(survived, levels = c(0, 1), labels = c('No', 'Yes'))) %>%
+na.omit()
+#previously were characters
+clean_titanic$age <- as.numeric(clean_titanic$age)
+clean_titanic$fare <- as.numeric(clean_titanic$fare)
+glimpse(clean_titanic)
+
+```
+
+Now, I will create an 80-20 training-testing split with a new function.  This will just take a user-specified percentage of the input data to be my training set and the leftover indices will comprise my test set.  Finally, I ensure that the proportion of individuals surviving the titanic is roughly even in both training and testing to prevent any sort of unnecessary imbalance.  
+
+
+```{r}
+
+create_train_test <- function(data, size = 0.8, train = TRUE) {
+    n_row = nrow(data)
+    total_row = size * n_row
+    train_sample <- 1: total_row
+    if (train == TRUE) {
+        return (data[train_sample, ])
+    } else {
+        return (data[-train_sample, ])
+    }
+}
+data_train <- create_train_test(clean_titanic, 0.8, train = TRUE)
+data_test <- create_train_test(clean_titanic, 0.8, train = FALSE)
+
+prop.table(table(data_train$survived))
+prop.table(table(data_test$survived))
+
+```
+
+Now we are ready to create my initial tree.  Here, I am less concerned with carefully pruning the trained tree, and more concerned with showing you the disastorous effects (even on a full tree) of poor training data.  For that reason, I will just use `rpart` and evaluate my full models.  
+
+```{r}
+
+library(rpart)
+library(rpart.plot)
+
+fit <- rpart(survived~pclass+sex+age+fare+sibsp+parch, data = data_train, method = 'class')
+rpart.plot(fit, extra = 106)
+
+```
+
+We can see that `sex` is arguably our most informative predictor followed by class of fare.  As a quick warning remember that our response comes in the form of a `Yes/No` to the question of survived the wreck.  So when the split goes to the left, it means that it evaluates that variable (say male) as yes, but when a node says `Yes` it means that observations in that node are more likely than not to have survived.  
+
+
+```{r}
+
+predict_unseen <-predict(fit, data_test, type = 'class')
+table_mat <- table(data_test$survived, predict_unseen)
+table_mat
+
+(106+59)/(106+59+10+34)
+
+```
+
+Finally, we can create a confusion matrix based on using this decision tree on our test data.  We see that this decision tree is correct about 79% of the time.  Let's see how this will change if we simply forget to reshuffle our observations and therefore train on a very imbalanced (relative to the testing set) set.  
+
+
+
+```{r}
+
+titanic <-read.csv(path)
+#replace ? with NA
+replace_question_mark <- function(x) {
+  if (is.character(x)) {
+    x <- na_if(x, "?")
+  }
+  return(x)
+}
+
+titanic <- titanic %>%
+  mutate_all(replace_question_mark)
+
+library(dplyr)
+# Drop variables
+clean_titanic <- titanic %>%
+select(-c(home.dest, cabin, name, x, ticket)) %>% 
+#Convert to factor level
+	mutate(pclass = factor(pclass, levels = c(1, 2, 3), labels = c('Upper', 'Middle', 'Lower')),
+	survived = factor(survived, levels = c(0, 1), labels = c('No', 'Yes'))) %>%
+na.omit()
+#previously were characters
+clean_titanic$age <- as.numeric(clean_titanic$age)
+clean_titanic$fare <- as.numeric(clean_titanic$fare)
+glimpse(clean_titanic)
+
+create_train_test <- function(data, size = 0.8, train = TRUE) {
+    n_row = nrow(data)
+    total_row = size * n_row
+    train_sample <- 1: total_row
+    if (train == TRUE) {
+        return (data[train_sample, ])
+    } else {
+        return (data[-train_sample, ])
+    }
+}
+data_train <- create_train_test(clean_titanic, 0.7, train = TRUE)
+data_test <- create_train_test(clean_titanic, 0.7, train = FALSE)
+
+prop.table(table(data_train$survived))
+prop.table(table(data_test$survived))
+
+library(rpart)
+library(rpart.plot)
+
+fit <- rpart(survived~pclass+sex+age+fare+sibsp+parch, data = data_train, method = 'class')
+rpart.plot(fit, extra = 106)
+
+predict_unseen <-predict(fit, data_test, type = 'class')
+table_mat <- table(data_test$survived, predict_unseen)
+table_mat
+
+(160+48)/(160+48+73+32)
+```
+
+Above we have simply repeated the code chunks without the random shuffling and only included 70\% of the data in the training set (30\%) in the test set. As a result close to 2/3 of the training set is either first or second class fare while the entire testing set is third class.  
+
+This quite clearly has a demonstrable impact on both the complexity and accuracy of the decision tree.  The classification accuracy has fallen by about 13%, and now `class` (which was previously quite an instrumental variable) is no longer even seen in the decision tree.  Why would it be?  When we are predicting on a completely homogeneous group with respect to one of the predictors, that predictor wont help us distinguish between observations. 
+
+This admittedly contrived (yet I argue easy to mistakenly create) example should underscore the importance of good training data.  Class of fare is indeed a useful metric for determining who made it off the Titanic, but a model trained on entirely imbalanced data may appear entirely agnostic to this variable.  
